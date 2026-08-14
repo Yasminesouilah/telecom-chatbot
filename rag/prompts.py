@@ -14,6 +14,19 @@ SYSTEM_PROMPT = (
     "to escalate to a human agent."
 )
 
+# Canned responses for routing decisions (classifier.py's `route` field).
+# These are NOT knowledge-base intents — no chunk is ever tagged with
+# them — so they're handled with a direct response instead of retrieval
+# + LLM generation. Add an entry here for every route value used in
+# config.OUT_OF_SCOPE_KEYWORDS.
+ROUTE_RESPONSES = {
+    "human_agent": (
+        "That's something a human agent needs to help with directly (like "
+        "scheduling a technician or site visit). I'll connect you with our "
+        "support team, who can arrange that for you."
+    ),
+}
+
 
 def build_prompt(question: str, retrieved_chunks: list[tuple[str, dict, float]]) -> str:
     """

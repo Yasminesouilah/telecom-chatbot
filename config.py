@@ -53,3 +53,12 @@ OLLAMA_MODEL = "mistral"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")  # never hardcode the key itself
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+MARGIN_THRESHOLD = 0.15   # min gap between top-1 and top-2 score
+OUT_OF_SCOPE_KEYWORDS = {
+    "technician": "human_agent",
+    "technician visit": "human_agent",
+    "home visit": "human_agent",
+    "site visit": "human_agent",
+    "engineer visit": "human_agent",
+}
+OOD_DISTANCE_THRESHOLD = 1.0  # placeholder — needs empirical tuning, see below
