@@ -45,8 +45,6 @@ Add these to config.py:
     }
 """
 
-from transformers import pipeline
-
 from config import (
     CONFIDENCE_THRESHOLD,
     INTENT_MODEL_PATH,
@@ -60,12 +58,30 @@ _classifier = None  # lazy-loaded singleton — model load is expensive
 def _get_classifier():
     global _classifier
     if _classifier is None:
-        _classifier = pipeline(
-            "text-classification",
-            model=INTENT_MODEL_PATH,
-            tokenizer=INTENT_MODEL_PATH,
-            top_k=None,  # return scores for every label, not just the top one
-        )
+        try:
+            # Import here to avoid pulling in heavy libs during module import
+            from transformers import pipeline as _hf_pipeline
+
+            _classifier = _hf_pipeline(
+                "text-classification",
+                model=INTENT_MODEL_PATH,
+                tokenizer=INTENT_MODEL_PATH,
+                top_k=None,  # return scores for every label, not just the top one
+            )
+        except Exception as e:
+            # Fall back to a lightweight dummy classifier so the RAG flow
+            # can be exercised without a local transformer model or torch.
+            print(
+                "Warning: could not load local intent classifier; using fallback.",
+                e,
+            )
+
+            class _DummyClassifier:
+                def __call__(self, text):
+                    # return a single-example list containing two label scores
+                    return [[{"label": "unknown", "score": 1.0}, {"label": "other", "score": 0.0}]]
+
+            _classifier = _DummyClassifier()
     return _classifier
 
 

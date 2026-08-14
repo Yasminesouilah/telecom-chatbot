@@ -1,64 +1,78 @@
 """
-Central configuration for the Mobilis Telecom RAG chatbot.
+Project configuration defaults. Values are read from environment variables
+so you can override them without editing this file (or place them in a
+.env file if you use a loader).
 
-Every tunable knob lives here so the rest of the codebase never
-hardcodes a model name, threshold, or path. Change behavior by
-editing this file (or overriding with environment variables) —
-never by editing rag/*.py directly.
+Add or tweak values as needed for your environment (API keys, model names,
+paths, thresholds, etc.).
 """
+from __future__ import annotations
 
 import os
+from typing import Dict
 
 from dotenv import load_dotenv
 
-load_dotenv()  # reads .env in this folder into os.environ, if present
+load_dotenv()  # reads .env in the project root into os.environ, if present
 
-# ── Data ──────────────────────────────────────────────────────────
-BITEXT_DATASET_PATH = (
-    "hf://datasets/bitext/Bitext-telco-llm-chatbot-training-dataset/"
-    "bitext-telco-llm-chatbot-training-dataset.csv"
+
+def _env(key: str, default: str | None = None) -> str | None:
+    return os.environ.get(key, default)
+
+
+# Embedding / dataset / intent model
+EMBED_MODEL: str = _env("EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+BITEXT_DATASET_PATH: str = _env(
+    "BITEXT_DATASET_PATH",
+    "hf://datasets/bitext/Bitext-telco-llm-chatbot-training-dataset/bitext-telco-llm-chatbot-training-dataset.csv",
 )
+INTENT_MODEL_PATH: str = _env("INTENT_MODEL_PATH", "mobilis_intent_model")
 
-# ── Intent classifier ────────────────────────────────────────────
-# Path to the model saved by 01_intent_classifier.ipynb (section 13).
-INTENT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "mobilis_intent_model")
 
-# Below this confidence, predict_intent() returns "unknown" instead
-# of a shaky label. Keep this in sync across classifier + RAG code —
-# it's why this lives here instead of being duplicated in both places.
-CONFIDENCE_THRESHOLD = 0.5
-
-# ── Embeddings ────────────────────────────────────────────────────
-# Multilingual by default (Mobilis serves Algerian customers — French/
-# Arabic input is likely). Swap to "all-MiniLM-L6-v2" for English-only,
-# slightly faster embeddings.
-EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-
-# ── Vector store ──────────────────────────────────────────────────
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
-CHROMA_COLLECTION_NAME = "mobilis_kb"
-RETRIEVAL_K = 3  # how many chunks to retrieve per query
-
-# ── LLM generation ────────────────────────────────────────────────
-# "openai", "ollama", or "groq" — generate_answer() in rag/llm.py branches on this.
-LLM_BACKEND = os.environ.get("LLM_BACKEND", "groq")
-
-OPENAI_MODEL = "gpt-4o-mini"
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # never hardcode the key itself
-
-OLLAMA_MODEL = "mistral"
-
-# Groq: free, no-credit-card tier. OpenAI-compatible API, so it reuses
-# the same client code as the OpenAI backend with a different base_url.
-GROQ_MODEL = "llama-3.3-70b-versatile"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")  # never hardcode the key itself
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-MARGIN_THRESHOLD = 0.15   # min gap between top-1 and top-2 score
-OUT_OF_SCOPE_KEYWORDS = {
+# Classifier thresholds and OOD keywords
+CONFIDENCE_THRESHOLD: float = float(_env("CONFIDENCE_THRESHOLD", "0.5"))
+MARGIN_THRESHOLD: float = float(_env("MARGIN_THRESHOLD", "0.15"))
+OUT_OF_SCOPE_KEYWORDS: Dict[str, str] = {
     "technician": "human_agent",
     "technician visit": "human_agent",
     "home visit": "human_agent",
     "site visit": "human_agent",
     "engineer visit": "human_agent",
 }
-OOD_DISTANCE_THRESHOLD = 1.0  # placeholder — needs empirical tuning, see below
+
+
+# Chroma / retrieval
+CHROMA_COLLECTION_NAME: str = _env("CHROMA_COLLECTION_NAME", "mobilis_kb")
+CHROMA_PERSIST_DIR: str = _env("CHROMA_PERSIST_DIR", "./chroma_persist")
+RETRIEVAL_K: int = int(_env("RETRIEVAL_K", "5"))
+OOD_DISTANCE_THRESHOLD: float = float(_env("OOD_DISTANCE_THRESHOLD", "0.8"))
+
+
+# LLM backend configuration: set keys/models via env for your provider
+LLM_BACKEND: str = _env("LLM_BACKEND", "groq")  # one of: openai, ollama, groq
+
+# OpenAI
+OPENAI_API_KEY: str | None = _env("OPENAI_API_KEY", _env("OPENAI_KEY", None))
+OPENAI_MODEL: str = _env("OPENAI_MODEL", "gpt-4o-mini")
+
+# Ollama
+OLLAMA_MODEL: str = _env("OLLAMA_MODEL", "mistral")
+
+# Groq (OpenAI-compatible endpoint)
+GROQ_API_KEY: str | None = _env("GROQ_API_KEY", None)
+GROQ_BASE_URL: str | None = _env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_MODEL: str | None = _env("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+
+if __name__ == "__main__":
+    # Quick smoke-check when invoked directly
+    print("Configuration preview:")
+    print(f"EMBED_MODEL={EMBED_MODEL}")
+    print(f"BITEXT_DATASET_PATH={BITEXT_DATASET_PATH}")
+    print(f"INTENT_MODEL_PATH={INTENT_MODEL_PATH}")
+    print(f"CHROMA_PERSIST_DIR={CHROMA_PERSIST_DIR}")
+    print(f"CHROMA_COLLECTION_NAME={CHROMA_COLLECTION_NAME}")
+    print(f"LLM_BACKEND={LLM_BACKEND}")
+    print(f"GROQ_API_KEY set: {GROQ_API_KEY is not None}")
+    print(f"GROQ_BASE_URL={GROQ_BASE_URL}")
+    print(f"GROQ_MODEL={GROQ_MODEL}")

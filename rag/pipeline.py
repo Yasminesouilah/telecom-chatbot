@@ -13,7 +13,7 @@ from rag.chunking import build_chunks
 from rag.classifier import predict_intent
 from rag.data_loader import load_knowledge_base
 from rag.embedding import get_embedding_fn
-from rag.llm import generate_answer
+from rag.llm import generate_answer, stream_answer
 from rag.prompts import ROUTE_RESPONSES, build_prompt
 from rag.vectorstore import build_or_load_collection, get_client, retrieve
 
@@ -50,7 +50,7 @@ def setup(rebuild: bool = False):
     return _collection
 
 
-def chat(message: str, k: int = RETRIEVAL_K, verbose: bool = True) -> str:
+def chat(message: str, k: int = RETRIEVAL_K, verbose: bool = True, history: list[dict] | None = None) -> str:
     """
     Full pipeline: classify intent -> OOD distance gate -> filter retrieval
     -> build prompt -> generate answer.
@@ -73,32 +73,71 @@ def chat(message: str, k: int = RETRIEVAL_K, verbose: bool = True) -> str:
     handled BEFORE any retrieval happens, not passed in as an intent_filter
     (that would return zero chunks and silently break the response).
     """
+    # Use the centralized prepare_prompt to avoid duplication.
+    prompt_or_answer, retrieved, route_answer = prepare_prompt(message, k=k, history=history)
+
+    if route_answer is not None:
+        if verbose:
+            print(f"Route            : {route_answer} (no retrieval, no LLM call)")
+            print("-" * 70)
+        return route_answer
+
+    # prompt_or_answer is the assembled prompt string here
+    prompt = prompt_or_answer
+    answer = generate_answer(prompt)
+
+    if verbose:
+        # Try to print some diagnostic info if available from retrieved
+        try:
+            top_distance = retrieved[0][2] if retrieved else float("inf")
+        except Exception:
+            top_distance = float("inf")
+        intent_filter = None
+        print("-" * 70)
+        print(f"Top retrieval dist: {top_distance:.4f} (OOD threshold={OOD_DISTANCE_THRESHOLD})")
+        print(f"Retrieval filter : {intent_filter}")
+        print("-" * 70)
+
+    return answer
+
+
+def prepare_prompt(message: str, k: int = RETRIEVAL_K, history: list[dict] | None = None):
+    """Run classifier/retrieval and return the assembled prompt and metadata.
+
+    Returns a 3-tuple: (prompt_or_none, retrieved_list_or_none, route_answer_or_none).
+    - If a route is detected, `route_answer_or_none` will be a string and the
+      other two values will be None or empty. Callers should short-circuit
+      and return/stream the canned `route_answer`.
+    - Otherwise `prompt_or_none` is the assembled prompt and `retrieved_list_or_none`
+      is the retrieval metadata list.
+    """
     global _collection
     if _collection is None:
         setup()
 
-    intent_result = predict_intent(message)
+    context_for_intent = message
+    if history:
+        for m in reversed(history):
+            if m.get("from") == "user" and m.get("text"):
+                context_for_intent = m.get("text") + "\n" + message
+                break
 
+    intent_result = predict_intent(context_for_intent)
+
+    # Handle explicit routing decisions early and return a canned answer
+    # so callers (sync or streaming) don't invoke the LLM.
     if intent_result["route"] is not None:
-        answer = ROUTE_RESPONSES.get(
-            intent_result["route"], ROUTE_RESPONSES["human_agent"]
-        )
-        if verbose:
-            print(f"Route            : {intent_result['route']} (no retrieval, no LLM call)")
-            print("-" * 70)
-        return answer
+        route_answer = ROUTE_RESPONSES.get(intent_result["route"], ROUTE_RESPONSES["human_agent"])
+        return None, None, route_answer
 
     intent_filter = None if intent_result["intent"] == "unknown" else intent_result["intent"]
 
-    # Always retrieve unfiltered first — this is the OOD signal, independent
-    # of whatever the classifier believes.
-    broad_retrieved = retrieve(_collection, message, k=k, intent_filter=None)
+    retrieval_query = message
+
+    broad_retrieved = retrieve(_collection, retrieval_query, k=k, intent_filter=None)
     top_distance = broad_retrieved[0][2] if broad_retrieved else float("inf")
 
     if top_distance > OOD_DISTANCE_THRESHOLD:
-        # Nothing in the KB is actually close to this message — don't trust
-        # the classifier's label even if it reported high confidence.
-        intent_result["intent"] = "unknown"
         intent_filter = None
         retrieved = broad_retrieved
     elif intent_filter is not None:
@@ -106,16 +145,28 @@ def chat(message: str, k: int = RETRIEVAL_K, verbose: bool = True) -> str:
     else:
         retrieved = broad_retrieved
 
-    prompt = build_prompt(message, retrieved)
-    answer = generate_answer(prompt)
+    prompt = build_prompt(message, retrieved, history=history)
+    return prompt, retrieved, None
 
-    if verbose:
-        print(
-            f"Predicted intent : {intent_result['intent']} "
-            f"(raw={intent_result['raw_intent']}, confidence={intent_result['confidence']:.2f})"
-        )
-        print(f"Top retrieval dist: {top_distance:.4f} (OOD threshold={OOD_DISTANCE_THRESHOLD})")
-        print(f"Retrieval filter : {intent_filter}")
-        print("-" * 70)
 
-    return answer
+def stream_chat(message: str, k: int = RETRIEVAL_K, history: list[dict] | None = None, backend: str | None = None):
+    """Stream tokens for a chat request by reusing prepare_prompt and
+    `rag.llm.stream_answer`. Yields strings (tokens/chunks) as produced
+    by the backend.
+    """
+    prompt, retrieved, route_answer = prepare_prompt(message, k=k, history=history)
+
+    # If a route was detected, stream the canned response and return.
+    if route_answer is not None:
+        # Stream the route answer in one piece to keep client simple.
+        yield route_answer
+        return
+
+    # Use configured backend unless caller overrides.
+    if backend is None:
+        from config import LLM_BACKEND as _cfg_backend
+
+        backend = _cfg_backend
+
+    for token in stream_answer(prompt, backend=backend):
+        yield token
